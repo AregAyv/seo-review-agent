@@ -1,0 +1,42 @@
+name: Daily SEO review
+
+on:
+  schedule:
+    - cron: "0 6 * * *"     # every day at 06:00 UTC – adjust to your team's morning
+  workflow_dispatch:         # lets you trigger it manually (great for the demo)
+
+permissions:
+  contents: write            # needed to commit snapshots/reports back to the repo
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run SEO agent
+        run: python seo_agent.py
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          FOCUS_URLS: ${{ vars.FOCUS_URLS }}
+          GSC_PROPERTY: ${{ vars.GSC_PROPERTY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_API_URL: ${{ vars.LLM_API_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PSI_API_KEY: ${{ secrets.PSI_API_KEY }}
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+      - name: Save history (snapshot + report)
+        if: always()   # keep the history even if delivery failed
+        run: |
+          git config user.name "seo-agent"
+          git config user.email "seo-agent@users.noreply.github.com"
+          git add data reports
+          git commit -m "SEO snapshot $(date -u +%F)" || echo "Nothing to commit"
+          git push
