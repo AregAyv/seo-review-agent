@@ -25,6 +25,7 @@ PSI_PAGES = int(os.environ.get("PSI_PAGES", "3"))
 DATA_DIR, REPORT_DIR = Path("data/snapshots"), Path("reports")
 UA = {"User-Agent": "Mozilla/5.0 (compatible; SEO-Review-Agent/1.0)"}
 TODAY = dt.date.today().isoformat()
+ASSET_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".pdf", ".mp4", ".zip", ".xml")
 
 
 def fetch(url, **kw):
@@ -82,7 +83,9 @@ def sitemap_urls(sitemaps, limit=5000):
             root = ET.fromstring(content)
         except Exception:
             continue
-        locs = [e.text.strip() for e in root.iter() if e.tag.endswith("loc") and e.text]
+        # Only the <loc> directly inside each <url>/<sitemap>; nested ones like <image:loc> are images, not pages
+        locs = [c.text.strip() for entry in root for c in entry
+                if c.tag.split("}")[-1] == "loc" and c.text]
         if root.tag.endswith("sitemapindex"):
             queue += locs
         else:
@@ -103,6 +106,7 @@ def homepage_links():
 
 def pick_sample(urls):
     """Focus pages + homepage + a STABLE sample (same pages every day, so diffs are meaningful)."""
+    urls = [u for u in urls if not urlparse(u).path.lower().endswith(ASSET_EXT)]
     head = list(dict.fromkeys(FOCUS_URLS + [SITE + "/"]))
     taken = {u.rstrip("/") for u in head}
     rest = sorted({u for u in urls if u.rstrip("/") not in taken},
@@ -114,6 +118,12 @@ def audit_page(url):
     start = time.time()
     try:
         r = fetch(url, allow_redirects=True)
+        for attempt in range(2):  # 429 = the server asks US to slow down: wait and retry
+            if r.status_code != 429:
+                break
+            wait = r.headers.get("Retry-After", "")
+            time.sleep(min(int(wait), 30) if wait.isdigit() else 10 * (attempt + 1))
+            r = fetch(url, allow_redirects=True)
     except Exception as e:
         return {"url": url, "status": 0, "error": str(e)[:120]}
     page = {"url": url, "status": r.status_code, "final_url": r.url,
@@ -229,6 +239,11 @@ def find_issues(today, prev):
     titles = defaultdict(list)
     for p in today["pages"]:
         u, o = p["url"], old_pages.get(p["url"], {})
+        if p["status"] == 429:
+            grouped[("info", "data health",
+                     "Not checked today: the server rate-limited the agent (HTTP 429), "
+                     "not a problem for normal visitors")].append(u)
+            continue
         if p["status"] == 0 or p["status"] >= 400:
             was_ok = o.get("status") == 200
             add("critical" if was_ok else "warning", "availability",
@@ -320,6 +335,8 @@ no # headers, no tables). Keep it under 250 words:
    then anything affecting traffic. For each: what's wrong, why it matters, one concrete next step.
 3. *Trends* – one or two lines on traffic / Core Web Vitals if data exists.
 4. *Ongoing (not new)* – one line summarising known issues still open.
+Issues in the "data health" category mean the agent could not measure something; say so in one line,
+never present them as problems users experience.
 If "focus_pages" are listed, always include a one-line status for each of them, even if healthy.
 If nothing is wrong, say so briefly."""
 
@@ -458,7 +475,7 @@ def main():
     pages = []
     for u in sample:
         pages.append(audit_page(u))
-        time.sleep(0.5)  # be polite to the server
+        time.sleep(1.5)  # be polite to the server (too fast = HTTP 429)
     snap = {
         "date": TODAY, "site": SITE, "robots": robots,
         "sitemap_url_count": len(urls), "pages": pages,
