@@ -39,4 +39,6 @@ jobs:
           git config user.email "seo-agent@users.noreply.github.com"
           git add data reports
           git commit -m "SEO snapshot $(date -u +%F)" || echo "Nothing to commit"
+          # Get any commits made since this run started (e.g. an earlier run today), keep ours on conflict
+          git pull --rebase -X theirs origin main
           git push
